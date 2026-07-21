@@ -62,18 +62,45 @@ export const subnetsOverlap = (networkAddressA, prefixLengthA, networkAddressB, 
   return startA <= endB && startB <= endA;
 };
 
-export const getBestCidrForHostCount = (hostCount) => {
+export const getBestCidrForHostCount = (hostCount, minPrefix = 24, maxPrefix = 30) => {
   const requiredHosts = hostCount;
-  let prefixLength = 32;
 
-  while (prefixLength >= 24) {
+  for (let prefixLength = maxPrefix; prefixLength >= minPrefix; prefixLength -= 1) {
     const hostBits = 32 - prefixLength;
     if (2 ** hostBits - 2 >= requiredHosts) {
       return prefixLength;
     }
-
-    prefixLength -= 1;
   }
 
-  return 24;
+  return minPrefix;
+};
+
+export const getDifficultySettings = (difficulty = 'medium') => {
+  switch (difficulty) {
+    case 'easy':
+      return {
+        label: 'Easy',
+        timerSeconds: 35,
+        minPrefix: 24,
+        maxPrefix: 30,
+        questionTypes: ['host', 'gateway'],
+      };
+    case 'hard':
+      return {
+        label: 'Hard',
+        timerSeconds: 20,
+        minPrefix: 8,
+        maxPrefix: 30,
+        questionTypes: ['host', 'gateway', 'same-subnet', 'overlap'],
+      };
+    case 'medium':
+    default:
+      return {
+        label: 'Medium',
+        timerSeconds: 25,
+        minPrefix: 16,
+        maxPrefix: 30,
+        questionTypes: ['host', 'gateway', 'same-subnet'],
+      };
+  }
 };

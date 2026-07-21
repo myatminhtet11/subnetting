@@ -43,4 +43,17 @@ describe('generateQuestion', () => {
     expect(question.options).toHaveLength(4);
     expect(question.type).toMatch(/host|gateway|same-subnet|overlap/i);
   });
+
+  it('returns difficulty-aware questions with realistic prompts', () => {
+    const easyQuestion = generateQuestion('easy');
+    const hardQuestion = generateQuestion('hard');
+
+    expect(easyQuestion.difficulty).toBe('easy');
+    expect(easyQuestion.timerSeconds).toBe(35);
+    expect(easyQuestion.prompt).toMatch(/branch|office|site|department|architect|engineer/i);
+
+    expect(hardQuestion.difficulty).toBe('hard');
+    expect(hardQuestion.timerSeconds).toBe(20);
+    expect(hardQuestion.prompt).toMatch(/ISP|Troubleshooting|Architect|gateway|ping|overlap/i);
+  });
 });

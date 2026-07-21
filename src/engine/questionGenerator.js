@@ -1,6 +1,7 @@
 import {
   calculateSubnetDetails,
   getBestCidrForHostCount,
+  getDifficultySettings,
   isSameSubnet,
   subnetsOverlap,
 } from './subnetEngine.js';
@@ -30,34 +31,50 @@ const buildOptionList = (correctAnswer, distractors = []) => {
   return shuffle(Array.from(options));
 };
 
-export const generateQuestion = () => {
-  const type = pick(['host', 'gateway', 'same-subnet', 'overlap']);
+const buildPrefixPool = (minPrefix, maxPrefix, correctPrefix) => {
+  return Array.from({ length: maxPrefix - minPrefix + 1 }, (_, index) => `/${minPrefix + index}`).filter(
+    (value) => value !== `/${correctPrefix}`,
+  );
+};
+
+export const generateQuestion = (difficulty = 'medium') => {
+  const settings = getDifficultySettings(difficulty);
+  const type = pick(settings.questionTypes);
 
   if (type === 'host') {
-    const hostCount = pick([6, 8, 10, 12, 24, 30]);
-    const prefixLength = getBestCidrForHostCount(hostCount);
+    const hostCount = pick([6, 8, 10, 12, 20, 24, 45, 60, 100]);
+    const prefixLength = getBestCidrForHostCount(hostCount, settings.minPrefix, settings.maxPrefix);
     const answer = `/${prefixLength}`;
+    const prompt = difficulty === 'easy'
+      ? `Senior Architect Prompt: You are designing a network for a branch office with ${hostCount} workstations. Which minimum CIDR mask conserves the most IP addresses?`
+      : difficulty === 'hard'
+        ? `Architect Capacity Prompt: A regional office needs ${hostCount} addresses for a new site. Which minimum CIDR mask conserves the most IP addresses?`
+        : `Operations Prompt: A department needs ${hostCount} addresses for a new rollout. Which CIDR mask is the smallest block that still fits the requirement?`;
 
     return {
       type,
-      prompt: `For ${hostCount} hosts, which CIDR gives the most efficient fit?`,
-      context: 'Think: how many usable hosts do you need, then pick the smallest block that covers them.',
-      options: buildOptionList(answer, ['/24', '/25', '/26', '/27', '/28', '/29', '/30']),
+      difficulty: difficulty.toLowerCase(),
+      timerSeconds: settings.timerSeconds,
+      prompt,
+      context: 'Think in terms of usable hosts and the smallest block that still covers the requirement.',
+      options: buildOptionList(answer, buildPrefixPool(settings.minPrefix, settings.maxPrefix, prefixLength)),
       answer,
       explanation: {
         title: 'Magic number / block size method',
         steps: [
-          `You need ${hostCount} usable hosts, so the subnet must support at least ${hostCount} addresses.` ,
-          `For /${prefixLength}, the block size is ${2 ** (32 - prefixLength)} addresses, which covers the need comfortably.`,
-          `That makes /${prefixLength} the best CIDR choice.`,
+          `You need ${hostCount} usable hosts, so the subnet must support at least ${hostCount} addresses.`,
+          `For ${answer}, the block size is ${2 ** (32 - prefixLength)} addresses, which covers the need comfortably.`,
+          `That makes ${answer} the best CIDR choice.`,
         ],
       },
     };
   }
 
   if (type === 'gateway') {
-    const networkAddress = pick(['192.168.1.0', '10.0.0.0', '172.16.0.0']);
-    const prefixLength = pick([24, 25, 26]);
+    const prefixLength = pick(
+      Array.from({ length: settings.maxPrefix - settings.minPrefix + 1 }, (_, index) => settings.minPrefix + index),
+    );
+    const networkAddress = pick(['192.168.1.0', '10.0.0.0', '172.16.0.0', '10.10.0.0', '172.16.32.0']);
     const details = calculateSubnetDetails(networkAddress, prefixLength);
     const candidates = [
       { address: details.networkAddress, label: 'Network ID' },
@@ -65,11 +82,18 @@ export const generateQuestion = () => {
       { address: details.usableHosts[0] || details.networkAddress, label: 'Valid host' },
     ];
     const picked = pick(candidates);
+    const prompt = difficulty === 'easy'
+      ? `Field Engineer Prompt: You are validating a small office subnet ${networkAddress}/${prefixLength}. Which label best describes ${picked.address}?`
+      : difficulty === 'hard'
+        ? `Troubleshooting Prompt: While validating a routed segment ${networkAddress}/${prefixLength}, you need to classify ${picked.address}. Which label fits best?`
+        : `Troubleshooting Prompt: During a network audit, you inspect ${picked.address} inside the ${networkAddress}/${prefixLength} block. What is the correct classification?`;
 
     return {
       type,
-      prompt: `Which label best describes ${picked.address}/${prefixLength}?`,
-      context: 'Remember the three buckets: network ID, broadcast address, or a usable host.',
+      difficulty: difficulty.toLowerCase(),
+      timerSeconds: settings.timerSeconds,
+      prompt,
+      context: 'Separate the network boundary, the broadcast boundary, and any usable host address.',
       options: buildOptionList(picked.label, ['Network ID', 'Broadcast address', 'Valid host', 'Reserved host']),
       answer: picked.label,
       explanation: {
@@ -84,41 +108,51 @@ export const generateQuestion = () => {
   }
 
   if (type === 'same-subnet') {
-    const networkAddress = pick(['192.168.1.0', '10.10.0.0', '172.20.0.0']);
-    const prefixLength = pick([24, 25, 26]);
+    const prefixLength = pick(
+      Array.from({ length: settings.maxPrefix - settings.minPrefix + 1 }, (_, index) => settings.minPrefix + index),
+    );
+    const networkAddress = pick(['10.10.0.0', '172.20.0.0', '192.168.10.0']);
     const details = calculateSubnetDetails(networkAddress, prefixLength);
     const firstIp = details.usableHosts[0] || details.networkAddress;
     const secondIp = details.usableHosts[1] || details.broadcastAddress;
     const isSame = isSameSubnet(firstIp, secondIp, prefixLength);
-    const answer = isSame ? 'Yes — same subnet' : 'No — different subnet';
+    const answer = isSame ? 'Yes — traffic stays local' : 'No — it needs a default gateway';
+    const prompt = `Troubleshooting Prompt: Host A (${firstIp}/${prefixLength}) is trying to ping Host B (${secondIp}/${prefixLength}). Will the traffic stay local or require a default gateway?`;
 
     return {
       type,
-      prompt: `Can ${firstIp} and ${secondIp} ping each other in ${networkAddress}/${prefixLength}?`,
-      context: 'If both addresses land in the same network block, they can usually reach each other.',
-      options: buildOptionList(answer, ['Yes — same subnet', 'No — different subnet', 'Only if the gateway is online', 'Depends on DHCP']),
+      difficulty: difficulty.toLowerCase(),
+      timerSeconds: settings.timerSeconds,
+      prompt,
+      context: 'If both hosts share the same subnet, they can usually reach each other without routing.',
+      options: buildOptionList(answer, ['Yes — traffic stays local', 'No — it needs a default gateway', 'Only if DNS resolves', 'Depends on the firewall']),
       answer,
       explanation: {
         title: 'Same-subnet ping logic',
         steps: [
-          `Both addresses share the same network ID ${details.networkAddress}.`,
+          `Both addresses share the network ID ${details.networkAddress}.`,
           `Any host inside that same block can communicate directly unless a firewall or routing rule blocks it.`,
         ],
       },
     };
   }
 
-  const firstNetwork = pick(['192.168.1.0', '10.0.0.0', '172.16.0.0']);
-  const firstPrefix = pick([24, 25, 26]);
-  const secondNetwork = firstNetwork === '192.168.1.0' ? '192.168.1.128' : '10.0.1.0';
-  const secondPrefix = firstPrefix === 24 ? 25 : 24;
+  const firstPrefix = pick(
+    Array.from({ length: settings.maxPrefix - settings.minPrefix + 1 }, (_, index) => settings.minPrefix + index),
+  );
+  const firstNetwork = pick(['172.16.32.0', '10.0.0.0', '192.168.8.0']);
+  const secondNetwork = firstNetwork === '172.16.32.0' ? '172.16.48.0' : '10.0.4.0';
+  const secondPrefix = firstPrefix > 24 ? 24 : firstPrefix + 1;
   const overlap = subnetsOverlap(firstNetwork, firstPrefix, secondNetwork, secondPrefix);
   const answer = overlap ? 'Yes — they overlap' : 'No — they stay separate';
+  const prompt = `ISP Allocation Prompt: An ISP assigns ${firstNetwork}/${firstPrefix}. Another customer block is ${secondNetwork}/${secondPrefix}. Do these allocations overlap?`;
 
   return {
     type,
-    prompt: `Do ${firstNetwork}/${firstPrefix} and ${secondNetwork}/${secondPrefix} overlap?`,
-    context: 'Compare the network range start and end points before you answer.',
+    difficulty: difficulty.toLowerCase(),
+    timerSeconds: settings.timerSeconds,
+    prompt,
+    context: 'Compare the start and end addresses of both subnets before answering.',
     options: buildOptionList(answer, ['Yes — they overlap', 'No — they stay separate', 'Only if they use the same mask', 'Not enough evidence']),
     answer,
     explanation: {
